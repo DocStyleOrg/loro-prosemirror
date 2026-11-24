@@ -94,15 +94,15 @@ export function updateLoroToPmState(
   const map = containerId
     ? (doc.getContainerById(containerId) as LoroMap<LoroNodeContainerType>)
     : doc.getMap(ROOT_DOC_KEY);
-  if (options.movableChildren) {
-    map.getOrCreateContainer(CHILDREN_KEY, new LoroMovableList());
-  }
 
   let isInit = false;
   if (map.get("nodeName") == null) {
     doc.commit();
     isInit = true;
     map.set("nodeName", node.type.name);
+  }
+  if (options.movableChildren) {
+    map.getOrCreateContainer(CHILDREN_KEY, new LoroMovableList());
   }
 
   updateLoroMap(map, node, mapping);
