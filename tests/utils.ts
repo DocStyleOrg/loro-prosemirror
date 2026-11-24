@@ -5,7 +5,7 @@ import {
   getLoroMapAttributes,
   getLoroMapChildren,
 } from "../src/lib";
-import { LoroList, LoroMap, LoroText } from "loro-crdt";
+import { LoroList, LoroMap, LoroMovableList, LoroText } from "loro-crdt";
 
 export function createEditorState(schema: Schema, content: any): EditorState {
   const doc = schema.nodeFromJSON(content);
@@ -15,11 +15,14 @@ export function createEditorState(schema: Schema, content: any): EditorState {
   });
 }
 
-export function insertLoroText(parent: LoroList): LoroText {
+export function insertLoroText(parent: LoroList | LoroMovableList): LoroText {
   return parent.insertContainer(parent.length, new LoroText());
 }
 
-export function insertLoroMap(parent: LoroList, nodeName: string): LoroNode {
+export function insertLoroMap(
+  parent: LoroList | LoroMovableList,
+  nodeName: string,
+): LoroNode {
   const obj = parent.insertContainer(parent.length, new LoroMap());
   setupLoroMap(obj, nodeName);
   return obj as unknown as LoroNode;

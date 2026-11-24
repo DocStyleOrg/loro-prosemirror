@@ -84,6 +84,7 @@ export const LoroSyncPlugin = (props: LoroSyncPluginProps): Plugin => {
                 state.mapping,
                 newEditorState,
                 props.containerId,
+                props,
               );
             }
             break;

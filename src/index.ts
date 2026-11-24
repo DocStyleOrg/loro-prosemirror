@@ -7,6 +7,7 @@ export {
 export {
   createNodeFromLoroObj,
   updateLoroToPmState,
+  type LoroSyncOptions,
   ROOT_DOC_KEY,
   NODE_NAME_KEY,
   CHILDREN_KEY,
