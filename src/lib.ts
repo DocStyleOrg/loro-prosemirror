@@ -610,11 +610,97 @@ export function getLoroMapChildren(obj: LoroNode): LoroChildrenListType {
   return obj.getOrCreateContainer(CHILDREN_KEY, new LoroList());
 }
 
+/**
+ * Updates a textblock whose text is in several LoroTexts. Two peers typing
+ * first into the same empty block each create one, and ProseMirror shows them
+ * as one run of text. Writing that run into the first LoroText and deleting
+ * the others would lose or duplicate what peers are typing into them.
+ *
+ * Instead, find the one change between the joined text and ProseMirror's, and
+ * give each LoroText its own slice of ProseMirror's text nodes, so each is
+ * diffed in place and none is deleted. An insert at a boundary goes to the
+ * LoroText on the left: the text it follows.
+ *
+ * Returns false, and changes nothing, unless every child is a LoroText and
+ * there are at least two.
+ */
+function updateSplitText(
+  loroChildren: LoroChildrenListType,
+  node: Node,
+  mapping: LoroNodeMapping,
+): boolean {
+  const texts = loroChildren.toArray();
+  if (
+    texts.length < 2 ||
+    !texts.every((child): child is LoroText => child instanceof LoroText)
+  ) {
+    return false;
+  }
+
+  const lengths = texts.map((text) => text.length);
+  const old = texts.map((text) => text.toString()).join("");
+  const next = node.textContent;
+  let start = 0;
+  while (
+    start < old.length &&
+    start < next.length &&
+    old[start] === next[start]
+  ) {
+    start++;
+  }
+  let end = 0;
+  while (
+    end < old.length - start &&
+    end < next.length - start &&
+    old[old.length - 1 - end] === next[next.length - 1 - end]
+  ) {
+    end++;
+  }
+  const removedTo = old.length - end;
+  const inserted = next.length - end - start;
+
+  // The LoroText that receives the insert: the first that reaches `start`.
+  let target = texts.length - 1;
+  for (let i = 0, base = 0; i < texts.length; base += lengths[i], i++) {
+    if (start <= base + lengths[i]) {
+      target = i;
+      break;
+    }
+  }
+
+  let from = 0;
+  let base = 0;
+  texts.forEach((text, i) => {
+    const removed = Math.max(
+      0,
+      Math.min(base + lengths[i], removedTo) - Math.max(base, start),
+    );
+    const size = lengths[i] - removed + (i === target ? inserted : 0);
+    const slice: Node[] = [];
+    node.content.cut(from, from + size).forEach((child) => slice.push(child));
+    if (eqLoroTextNodes(text, slice)) {
+      mapping.set(text.id, slice);
+    } else {
+      updateLoroText(text, slice, mapping);
+    }
+    from += size;
+    base += lengths[i];
+  });
+  return true;
+}
+
 export function updateLoroMapChildren(
   obj: LoroNode,
   node: Node,
   mapping: LoroNodeMapping,
 ): void {
+  if (
+    node.isTextblock &&
+    updateSplitText(getLoroMapChildren(obj), node, mapping)
+  ) {
+    return;
+  }
+
   const loroChildren = getLoroMapChildren(obj);
   const loroChildLength = loroChildren.length;
 
