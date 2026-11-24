@@ -101,7 +101,9 @@ export function updateLoroToPmState(
     isInit = true;
     map.set("nodeName", node.type.name);
   }
-  if (options.movableChildren) {
+  if (options.movableChildren && map.get(CHILDREN_KEY) == null) {
+    // In the order the binding creates them: attributes, then children.
+    getLoroMapAttributes(map);
     map.getOrCreateContainer(CHILDREN_KEY, new LoroMovableList());
   }
 
