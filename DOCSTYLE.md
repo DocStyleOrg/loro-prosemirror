@@ -12,7 +12,7 @@ DocStyle depends on this fork's `main` as a git dependency, pinned to a commit. 
 | `fix/remote-changes-minimal-replace` | A remote change replaces only what changed                                              |
 | `feat/movable-children`              | The `movableChildren` option: children in `LoroMovableList`s, block moves as Loro moves |
 
-Fork-only: the `prepare` script, which builds `dist/` when the package is installed from git, the
-`es2022` build target (at `es2020` the build inlines an oxc runtime helper, which failed to bundle
-during pnpm's git-dependency prepare on Linux CI), and this file. Keep each branch on upstream's `main`, and merge it here; take upstream releases by
+Fork-only: the `prepare` script, which builds `dist/` when the package is installed from git, and two
+build settings in `tsdown.config.mjs` (`es2022` and `inlineOnly: false`) that let that build run
+inside a `node_modules` folder, where pnpm's store sits on CI. See the comment there. And this file. Keep each branch on upstream's `main`, and merge it here; take upstream releases by
 merging upstream's `main`.
