@@ -8,6 +8,7 @@ import {
   type LoroEventBatch,
   LoroList,
   LoroMap,
+  LoroMovableList,
   LoroText,
   LoroTree,
   type Value,
@@ -16,9 +17,9 @@ import { type Attrs, Mark, Node, Schema } from "prosemirror-model";
 import { type EditorState, TextSelection } from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 
-export type LoroChildrenListType = LoroList<
-  LoroMap<LoroNodeContainerType> | LoroText
->;
+export type LoroChildrenListType =
+  | LoroList<LoroMap<LoroNodeContainerType> | LoroText>
+  | LoroMovableList<LoroMap<LoroNodeContainerType> | LoroText>;
 export type LoroNodeContainerType = {
   [CHILDREN_KEY]: LoroChildrenListType;
   [ATTRIBUTES_KEY]: LoroMap;
@@ -50,7 +51,7 @@ export type LoroType = LoroContainer | Value;
 //
 // A PM non-text node, it has attributes and children, which represents as a
 // LoroMap with a `"attributes": LoroMap` and a `"children": LoroList` inside
-// of it. Both that attributes and children are just part of the parent LoroMap
+// of it. (With `movableChildren`, the children are a `LoroMovableList`.) Both that attributes and children are just part of the parent LoroMap
 // structure, which is mapped to an actual node.
 //
 // See also: https://prosemirror.net/docs/guide/#doc.data_structures
@@ -68,16 +69,34 @@ export const WEAK_NODE_TO_LORO_CONTAINER_MAPPING = new WeakMap<
   ContainerID
 >();
 
+export interface LoroSyncOptions {
+  /**
+   * Store children in `LoroMovableList`s instead of `LoroList`s, so a block
+   * moved in ProseMirror is moved in Loro instead of deleted and re-created,
+   * and a concurrent edit inside it survives the move.
+   *
+   * It decides the kind of the root's children list when the binding creates
+   * it. Every list the binding creates after that takes the kind of the list
+   * its node sits in, so a document keeps one kind throughout, whatever this
+   * option says when it's opened later.
+   */
+  movableChildren?: boolean;
+}
+
 export function updateLoroToPmState(
   doc: LoroDocType,
   mapping: LoroNodeMapping,
   editorState: EditorState,
   containerId?: ContainerID,
+  options: LoroSyncOptions = {},
 ) {
   const node = editorState.doc;
   const map = containerId
     ? (doc.getContainerById(containerId) as LoroMap<LoroNodeContainerType>)
     : doc.getMap(ROOT_DOC_KEY);
+  if (options.movableChildren) {
+    map.getOrCreateContainer(CHILDREN_KEY, new LoroMovableList());
+  }
 
   let isInit = false;
   if (map.get("nodeName") == null) {
@@ -185,7 +204,7 @@ export function createLoroChild(
 }
 
 export function createLoroText(
-  parentList: LoroList,
+  parentList: LoroList | LoroMovableList,
   pos: number | null,
   nodes: Node[],
   mapping: LoroNodeMapping,
@@ -606,8 +625,115 @@ export function updateLoroMapAttributes(
   }
 }
 
+/**
+ * The node's children list. If it has none yet, the new list is of the same
+ * kind as the list the node sits in.
+ */
 export function getLoroMapChildren(obj: LoroNode): LoroChildrenListType {
-  return obj.getOrCreateContainer(CHILDREN_KEY, new LoroList());
+  const existing = obj.get(CHILDREN_KEY);
+  if (existing != null) {
+    return existing;
+  }
+  return obj.parent() instanceof LoroMovableList
+    ? obj.getOrCreateContainer(CHILDREN_KEY, new LoroMovableList())
+    : obj.getOrCreateContainer(CHILDREN_KEY, new LoroList());
+}
+
+/**
+ * Turns ProseMirror block moves into Loro moves, before the diff below. Each
+ * child node that came from a container in this list keeps it. A node that
+ * appears twice is a copy, so only the first keeps it. The fewest containers
+ * are moved (all but a longest run already in order) to put them in the
+ * nodes' order. The diff then finds them in place, instead of deleting and
+ * re-creating them.
+ */
+function moveRetainedChildren(
+  list: LoroChildrenListType,
+  nodeChildren: (Node | Node[])[],
+) {
+  if (!(list instanceof LoroMovableList)) {
+    return;
+  }
+  const order = list
+    .toArray()
+    .map((child) => (isContainer(child) ? child.id : null));
+  const at = new Map<ContainerID, number>();
+  order.forEach((id, index) => {
+    if (id != null) {
+      at.set(id, index);
+    }
+  });
+
+  const claimed = new Set<ContainerID>();
+  const target: ContainerID[] = [];
+  for (const child of nodeChildren) {
+    if (Array.isArray(child)) {
+      continue;
+    }
+    const id = WEAK_NODE_TO_LORO_CONTAINER_MAPPING.get(child);
+    if (id != null && at.has(id) && !claimed.has(id)) {
+      claimed.add(id);
+      target.push(id);
+    }
+  }
+  if (target.length < 2) {
+    return;
+  }
+
+  const keep = longestIncreasing(target.map((id) => at.get(id)!));
+  if (keep.size === target.length) {
+    return;
+  }
+  const firstKept = target.find((_, k) => keep.has(k))!;
+  target.forEach((id, k) => {
+    if (keep.has(k)) {
+      return;
+    }
+    const from = order.indexOf(id);
+    let to: number;
+    if (k > 0) {
+      // Right after the container that precedes it in the new order.
+      const after = order.indexOf(target[k - 1]);
+      to = from < after ? after : after + 1;
+    } else {
+      // Right before the first container that stays.
+      const before = order.indexOf(firstKept);
+      to = from < before ? before - 1 : before;
+    }
+    if (from === to) {
+      return;
+    }
+    list.move(from, to);
+    order.splice(from, 1);
+    order.splice(to, 0, id);
+  });
+}
+
+/** The indexes in `values` of one longest strictly increasing subsequence. */
+function longestIncreasing(values: number[]): Set<number> {
+  const tails: number[] = [];
+  const previous = new Array<number>(values.length).fill(-1);
+  values.forEach((value, i) => {
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (values[tails[mid]] < value) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    if (lo > 0) {
+      previous[i] = tails[lo - 1];
+    }
+    tails[lo] = i;
+  });
+  const keep = new Set<number>();
+  for (let i = tails[tails.length - 1] ?? -1; i >= 0; i = previous[i]) {
+    keep.add(i);
+  }
+  return keep;
 }
 
 export function updateLoroMapChildren(
@@ -616,9 +742,10 @@ export function updateLoroMapChildren(
   mapping: LoroNodeMapping,
 ): void {
   const loroChildren = getLoroMapChildren(obj);
-  const loroChildLength = loroChildren.length;
-
   const nodeChildren = normalizeNodeContent(node);
+  moveRetainedChildren(loroChildren, nodeChildren);
+
+  const loroChildLength = loroChildren.length;
   const nodeChildLength = nodeChildren.length;
 
   const minLength = Math.min(nodeChildLength, loroChildLength);

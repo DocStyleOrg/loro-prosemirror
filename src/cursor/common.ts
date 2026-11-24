@@ -2,6 +2,7 @@ import {
   type ContainerID,
   Cursor,
   LoroList,
+  LoroMovableList,
   LoroText,
   type PeerID,
 } from "loro-crdt";
@@ -382,7 +383,7 @@ export function cursorToAbsolutePosition(
   }
   while (loroNode != null) {
     const children = loroNode.get(CHILDREN_KEY);
-    if (children instanceof LoroList) {
+    if (children instanceof LoroList || children instanceof LoroMovableList) {
       const childIds = children.toArray() as LoroNode[];
       for (const iter of childIds) {
         if (iter.id === targetChildId) {

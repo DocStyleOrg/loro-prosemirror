@@ -53,3 +53,13 @@ const plugins = [
   // see above for other plugins
 ];
 ```
+
+## Moving blocks
+
+By default, a node's children are stored in a `LoroList`, so moving a block in ProseMirror deletes it and inserts a copy. A concurrent edit inside the moved block doesn't follow it. With `movableChildren`, children are stored in a [`LoroMovableList`](https://loro.dev/docs/tutorial/list), and a move is a Loro move that keeps the block's container and the edits inside it:
+
+```ts
+LoroSyncPlugin({ doc, movableChildren: true });
+```
+
+The option decides the kind of list when the binding creates the document's first one. New lists take the kind of the list they sit in, so a document keeps one kind throughout. Moves stay within one list: moving a block into another list, such as into a list item, still deletes and re-creates it.
