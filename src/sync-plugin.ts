@@ -168,6 +168,9 @@ function init(view: EditorView) {
       type: "update-state",
       state: { mapping, docSubscription, snapshot: null },
     });
+    // Loading the document isn't an edit. Undoing it would empty the editor,
+    // and the binding would sync that as deleting the whole document.
+    tr.setMeta("addToHistory", false);
     view.dispatch(tr);
   }
 }
@@ -209,6 +212,9 @@ function updateNodeOnLoroEvent(view: EditorView, event: LoroEventBatch) {
   tr.setMeta(loroSyncPluginKey, {
     type: "non-local-updates",
   });
+  // Someone else's change isn't this user's to undo. ProseMirror's history
+  // maps its own steps over it instead.
+  tr.setMeta("addToHistory", false);
   view.dispatch(tr);
 
   if (anchor == null) {
