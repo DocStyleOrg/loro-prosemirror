@@ -1,6 +1,11 @@
 import type { Cursor, LoroEventBatch, LoroMap } from "loro-crdt";
-import { Fragment, Slice } from "prosemirror-model";
-import { type EditorState, Plugin, type StateField } from "prosemirror-state";
+import { Fragment, type Node, Slice } from "prosemirror-model";
+import {
+  type EditorState,
+  Plugin,
+  type StateField,
+  type Transaction,
+} from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 
 import {
@@ -15,6 +20,7 @@ import {
   type LoroNodeMapping,
   ROOT_DOC_KEY,
   safeSetSelection,
+  WEAK_NODE_TO_LORO_CONTAINER_MAPPING,
   updateLoroToPmState,
 } from "./lib";
 import {
@@ -200,11 +206,8 @@ function updateNodeOnLoroEvent(view: EditorView, event: LoroEventBatch) {
     state,
   );
 
-  let tr = view.state.tr.replace(
-    0,
-    view.state.doc.content.size,
-    new Slice(Fragment.from(node), 0, 0),
-  );
+  const tr = replaceChanged(view.state.doc, node, view.state.tr);
+  remapView(node, tr.doc, mapping);
 
   tr.setMeta(loroSyncPluginKey, {
     type: "non-local-updates",
@@ -217,6 +220,54 @@ function updateNodeOnLoroEvent(view: EditorView, event: LoroEventBatch) {
   setTimeout(() => {
     syncCursorsToPmSelection(view, anchor, focus);
   });
+}
+
+/**
+ * Replaces only the part of `old` that differs from `next`. The rebuilt
+ * document shares every unchanged subtree with the old one, so the diff finds
+ * the real change. Positions outside it, the caret's among them, map through,
+ * and the rest of the DOM stays as it is.
+ */
+function replaceChanged(old: Node, next: Node, tr: Transaction): Transaction {
+  const start = old.content.findDiffStart(next.content);
+  if (start == null) {
+    return tr;
+  }
+  let { a: endA, b: endB } = old.content.findDiffEnd(next.content)!;
+  // When the change repeats what's next to it, the two ends can cross.
+  const overlap = start - Math.min(endA, endB);
+  if (overlap > 0) {
+    endA += overlap;
+    endB += overlap;
+  }
+  tr.replace(start, endA, next.slice(start, endB));
+  if (!tr.doc.eq(next)) {
+    // The slice didn't fit where it was cut: replace everything.
+    return tr.replace(0, tr.doc.content.size, new Slice(next.content, 0, 0));
+  }
+  return tr;
+}
+
+/**
+ * Points the mapping at the nodes the view now holds. After a partial replace,
+ * the view keeps its old nodes outside the change and has new ancestors around
+ * it, while the mapping holds the rebuilt document's nodes. They are equal.
+ */
+function remapView(built: Node, shown: Node, mapping: LoroNodeMapping) {
+  if (built === shown) {
+    return;
+  }
+  const id = WEAK_NODE_TO_LORO_CONTAINER_MAPPING.get(built);
+  if (id != null) {
+    WEAK_NODE_TO_LORO_CONTAINER_MAPPING.set(shown, id);
+    mapping.set(id, shown);
+  }
+  if (built.isTextblock) {
+    return;
+  }
+  for (let i = 0; i < built.childCount && i < shown.childCount; i++) {
+    remapView(built.child(i), shown.child(i), mapping);
+  }
 }
 
 /**
