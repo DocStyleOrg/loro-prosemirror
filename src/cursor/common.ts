@@ -345,6 +345,68 @@ function absolutePositionToCursor(
   return undefined;
 }
 
+/**
+ * The caret at `pos` as a Loro cursor that stays with the text before it: on
+ * the character before the caret, on its right side. A remote insert at the
+ * caret then lands after it, and the next key goes after the user's own text.
+ * At the start of a block, the cursor is on the first character's left side.
+ *
+ * Returns undefined outside text, and in a block with no text yet.
+ */
+export function caretToCursor(
+  pmRootNode: Node,
+  pos: number,
+  doc: LoroDocType,
+  mapping: LoroNodeMapping,
+): Cursor | undefined {
+  const $pos = pmRootNode.resolve(pos);
+  if (!$pos.parent.isTextblock) {
+    return undefined;
+  }
+  const loroId =
+    WEAK_NODE_TO_LORO_CONTAINER_MAPPING.get($pos.parent) ??
+    getByValue(mapping, $pos.parent);
+  if (!loroId) {
+    return undefined;
+  }
+  const children = (doc.getContainerById(loroId) as LoroNode | undefined)?.get(
+    CHILDREN_KEY,
+  );
+  const texts = (children?.toArray() ?? []).filter(
+    (child): child is LoroText => child instanceof LoroText,
+  );
+  const offset = $pos.parentOffset;
+  if (offset === 0) {
+    return texts[0]?.length ? texts[0].getCursor(0, -1) : undefined;
+  }
+  let base = 0;
+  for (const text of texts) {
+    if (offset - 1 < base + text.length) {
+      return text.getCursor(offset - 1 - base, 1);
+    }
+    base += text.length;
+  }
+  return undefined;
+}
+
+/** Where a cursor from `caretToCursor` puts the caret now, if anywhere. */
+export function cursorToCaret(
+  cursor: Cursor,
+  doc: LoroDocType,
+  mapping: LoroNodeMapping,
+): number | undefined {
+  try {
+    if (!doc.getCursorPos(cursor)) {
+      return undefined;
+    }
+    const [pos] = cursorToAbsolutePosition(cursor, doc, mapping);
+    return cursor.side() === 1 ? pos + 1 : pos;
+  } catch {
+    // The cursor's text was deleted, or isn't in the document any more.
+    return undefined;
+  }
+}
+
 export function cursorToAbsolutePosition(
   cursor: Cursor,
   doc: LoroDocType,

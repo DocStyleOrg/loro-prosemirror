@@ -1,11 +1,17 @@
 import type { Cursor, LoroEventBatch, LoroMap } from "loro-crdt";
 import { Fragment, Slice } from "prosemirror-model";
-import { type EditorState, Plugin, type StateField } from "prosemirror-state";
+import {
+  type EditorState,
+  Plugin,
+  type StateField,
+  TextSelection,
+} from "prosemirror-state";
 import type { EditorView } from "prosemirror-view";
 
 import {
-  convertPmSelectionToCursors,
+  caretToCursor,
   cursorToAbsolutePosition,
+  cursorToCaret,
 } from "./cursor/common";
 import {
   clearChangedNodes,
@@ -103,7 +109,9 @@ export const LoroSyncPlugin = (props: LoroSyncPluginProps): Plugin => {
     view: (view: EditorView) => {
       const timeoutId = setTimeout(() => init(view), 0);
       return {
-        update: (_view: EditorView, _prevState: EditorState) => {},
+        update: (view: EditorView, _prevState: EditorState) => {
+          storeCaret(view);
+        },
         destroy: () => {
           clearTimeout(timeoutId);
         },
@@ -197,17 +205,29 @@ function updateNodeOnLoroEvent(view: EditorView, event: LoroEventBatch) {
       : (state.doc as LoroDocType).getMap(ROOT_DOC_KEY),
     mapping,
   );
-  const { anchor, focus } = convertPmSelectionToCursors(
-    view.state.doc,
-    view.state.selection,
-    state,
-  );
-
-  let tr = view.state.tr.replace(
+  const tr = view.state.tr.replace(
     0,
     view.state.doc.content.size,
     new Slice(Fragment.from(node), 0, 0),
   );
+
+  // Put the caret back in the same transaction, from the cursors taken before
+  // the import. Restoring it later would let keys typed in between land
+  // wherever the replace left it.
+  const caret = state.caret;
+  if (caret) {
+    const anchor = cursorToCaret(caret.anchor, state.doc, mapping);
+    const head =
+      caret.head === caret.anchor
+        ? anchor
+        : cursorToCaret(caret.head, state.doc, mapping);
+    const size = tr.doc.content.size;
+    if (anchor != null && head != null && anchor <= size && head <= size) {
+      tr.setSelection(
+        TextSelection.between(tr.doc.resolve(anchor), tr.doc.resolve(head)),
+      );
+    }
+  }
 
   tr.setMeta(loroSyncPluginKey, {
     type: "non-local-updates",
@@ -216,13 +236,33 @@ function updateNodeOnLoroEvent(view: EditorView, event: LoroEventBatch) {
   // maps its own steps over it instead.
   tr.setMeta("addToHistory", false);
   view.dispatch(tr);
+}
 
-  if (anchor == null) {
+/**
+ * Remembers the selection as Loro cursors. Called after every view update,
+ * when the view and the Loro document agree.
+ */
+function storeCaret(view: EditorView) {
+  const state = loroSyncPluginKey.getState(view.state);
+  if (!state || state.snapshot !== null || state.mapping == null) {
     return;
   }
-  setTimeout(() => {
-    syncCursorsToPmSelection(view, anchor, focus);
-  });
+  const { anchor, head } = view.state.selection;
+  const doc = state.doc as LoroDocType;
+  const anchorCursor = caretToCursor(
+    view.state.doc,
+    anchor,
+    doc,
+    state.mapping,
+  );
+  const headCursor =
+    head === anchor
+      ? anchorCursor
+      : caretToCursor(view.state.doc, head, doc, state.mapping);
+  state.caret =
+    anchorCursor && headCursor
+      ? { anchor: anchorCursor, head: headCursor }
+      : null;
 }
 
 /**
